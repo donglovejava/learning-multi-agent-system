@@ -99,7 +99,7 @@ def build_registry() -> AgentRegistry:
         RetrievalAgent(llm, repo, repo),
         DocumentAgent(llm, get_scaffold()),
         QuizAgent(llm),
-        MindMapAgent(repo),
+        MindMapAgent(llm, repo),
         CodeAgent(llm),
         VideoAgent(get_seedance(), llm),
         PathAgent(repo, get_recommender()),

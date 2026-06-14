@@ -3,14 +3,15 @@
 > 本文件供接手的开发者（或另一个 Claude 实例）快速了解项目当前真实进度、
 > 已完成内容、占位内容，以及下一步该做什么。**请先读完本文件再动手。**
 >
-> 最后更新：2026-06-14
+> 最后更新：2026-06-14（第 2 版：讯飞星火接通，端到端资源生成链路跑通）
 
 ---
 
 ## 一句话结论
 
-**目前是「骨架 + 3 个能跑的算法」，距离文档描述的可用系统约完成 15%。**
-现在还不能演示任何端到端功能——因为整个系统的「大脑」（LLM 调用）还是空的。
+**骨架 + 3 个能跑的算法 + 一条真实跑通的资源生成链路，约完成 20%。**
+系统的「大脑」（讯飞星火 LLM）已接通，`POST /api/v1/resources` 能真实生成讲解文档（8 秒，HTTP 200）。
+但 6 种资源里只有「文档」这一种打通；画像/评估 API、向量检索、知识图谱、前端仍未实现。
 
 ---
 
@@ -31,14 +32,15 @@
 | 3 个 P0 创新算法 | ✅ **真实可运行** | 遗忘曲线 / 脚手架 / 可解释推荐，纯算法，已冒烟测试 |
 | 4 个 P1 创新模块 | 🟡 有代码，**未测试** | 跨模态 / 群体智能 / 认知负荷 / 元认知 |
 | 项目结构 / 配置 / 编排图 | ✅ 骨架完整 | LangGraph 编排、依赖装配、FastAPI 路由都搭好了 |
-| **讯飞星火 LLM 调用** | ❌ **空的** | `_call_api`、`embed`、`classify_intent` 全是 `NotImplementedError` |
+| **讯飞星火 LLM 调用** | ✅ **已接通** | HTTP OpenAI 兼容版，`chat`/`chat_stream`/`classify_intent`/`extract_knowledge` 全部真实可用；`embed` 仍占位 |
+| **讲解文档生成** | ✅ **端到端跑通** | `POST /api/v1/resources` → 11 Agent 编排 → 星火 → 真实文档，8 秒，HTTP 200 |
+| 其余 5 种资源生成 | 🟡 代码在但未验证 | quiz 的 `_generate_batch` 仍 `NotImplementedError`；mindmap/video/code 未端到端测 |
 | **SeeDance 视频** | ❌ 空的 | `NotImplementedError` |
-| **数据库 / Milvus / Neo4j** | ❌ 全是空桩 | `app/dependencies.py` 的 `_PlaceholderRepo` 返回空数据 |
-| 6 种资源生成 | ❌ 不可用 | 依赖 LLM，现在调用就抛错 |
-| 画像 / 评估 API | ❌ 不可用 | `NotImplementedError` |
+| **数据库 / Milvus / Neo4j** | ❌ 全是空桩 | `app/dependencies.py` 的 `_PlaceholderRepo`；检索已优雅降级为「无外部知识」 |
+| 画像 / 评估 API | ❌ 不可用 | `get_profile`/`update_profile`/`get_assessment` 仍 `NotImplementedError` |
 | 前端 | ❌ **完全没有** | 一行代码都没写（文档列了 12 个页面） |
-| 测试套件 | ❌ 没有 | 只做了手动冒烟，无 pytest |
-| 依赖安装 | ❌ 没装 | fastapi/sqlalchemy/langgraph 等都没装 |
+| 测试套件 | 🟡 有手动验证 | `verify_spark.py`（讯飞连通 4 项全过）+ 端到端 HTTP 验证通过，无 pytest |
+| 依赖安装 | 🟡 最小集已装 | 已装 fastapi 0.136 / uvicorn / pydantic-settings / httpx（Python 3.14）；sqlalchemy/langgraph 等未装（有降级回退） |
 
 后端约 2600 行 Python，但相当比例是「接口定义 + 占位」，真正含业务逻辑的是几个算法文件。
 
@@ -50,20 +52,24 @@
 
 ---
 
-## 为什么卡在 15%
+## 当前里程碑：端到端链路已跑通（2026-06-14）
 
-关键：**这是一个 AI 系统，而 AI 的部分（LLM）现在是空的。**
-`spark_client._call_api` 没实现，意味着 11 个 Agent 里有 8 个（文档/题目/画像/代码/审核/检索/编排/视频）一调用就报错。算法再漂亮，没有 LLM 喂数据也跑不起来。
+**「输入知识点 → 11 Agent 编排 → 讯飞星火 → 返回讲解文档」整条链路真实跑通了。**
+- 讯飞星火 HTTP（OpenAI 兼容版，`lite` 模型免费无限量）已接通：对话/意图分类/知识点抽取/真流式 4 项验证全过。
+- `POST /api/v1/resources` 返回 HTTP 200，真实生成 ~1500 字讲解文档，耗时约 8s（达标 PM-006 ≤10s）。
+- 故障隔离生效：retrieval（缺向量库）等降级跳过，不阻断主链路。
+
+**仍然空着的大块：** 真实数据层（PostgreSQL/Neo4j/Milvus 仍是 `_PlaceholderRepo` 桩）、5/6 种资源的 Prompt 调优（目前只验证了 document）、前端、视频、测试套件。
 
 ---
 
 ## 下一步路线图（按依赖顺序，括号为粗略工作量，熟练 1 人）
 
-### 第一梯队 —— 让它「活过来」（约 5-7 天）
-1. **实现 `app/llm/spark_client.py` 的 `_call_api`，真实接讯飞星火 API（最高优先级，所有功能的前提）**
-2. 实现 `embed` + `classify_intent`
-3. 接 PostgreSQL 真实仓储（替换 `_PlaceholderRepo`，画像/学习记录读写）
-4. 装依赖（`pip install -r backend/requirements.txt`）+ 跑通一条端到端链路
+### 第一梯队 —— 让它「活过来」（✅ 已完成）
+1. ~~实现 `spark_client` 真实接讯飞星火 API~~ ✅ 已完成（HTTP OpenAI 兼容版）
+2. ~~`classify_intent` / `extract_knowledge`~~ ✅ 已完成（`embed` 仍占位，OpenAI 端点不含向量化）
+3. ~~跑通一条端到端链路~~ ✅ 已完成（资源生成链路）
+4. 接 PostgreSQL 真实仓储（替换 `_PlaceholderRepo`，画像/学习记录读写）—— **下一步起点**
 
 ### 第二梯队 —— 核心功能成形（约 7-10 天）
 5. Neo4j 知识图谱 + 真实数据导入（路径规划、可解释推荐都依赖它）
@@ -84,10 +90,14 @@
 
 ## 立刻能做的第一件事
 
-**接通讯飞星火 API**（`app/llm/spark_client.py:_call_api`）。这是单点瓶颈，打通后能立刻验证一条真实链路（如「输入知识点 → 真实生成讲解文档」），整个系统才算从「骨架」变成「能演示」。
+**接 PostgreSQL 真实仓储**，替换 `app/dependencies.py` 的 `_PlaceholderRepo`。
+画像/学习记录一旦能持久化，Profile/Assessment Agent 和画像/评估 API（目前 `NotImplementedError`）就能真正可用，是从「单次生成」走向「持续跟踪」的关键。
 
-需要：讯飞开放平台 `APP_ID / API_KEY / API_SECRET`，填入 `backend/.env`（从 `.env.example` 复制）。
-注意确认用 HTTP 版还是 WebSocket 版接口。
+ORM 模型已就绪（`app/db/models.py`），建表脚本在 `docs/sql/init_schema.sql`，异步会话在 `app/db/session.py`。
+起 PostgreSQL：项目根 `docker compose up -d db`，连接串填 `backend/.env` 的 `DATABASE_URL`。
+
+> 讯飞星火已接通（HTTP OpenAI 兼容版，`lite` 免费无限量），密钥已在本地 `.env`（不进 git）。
+> 验证连通可随时跑 `cd backend && py verify_spark.py`。
 
 ---
 

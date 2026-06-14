@@ -13,6 +13,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def ewma_update(old: float, observed: float, alpha: float = 0.3) -> float:
+    """EWMA 指数加权移动平均更新（§7.3.1）。
+
+    V_new = α · V_observed + (1 - α) · V_old
+
+    用于数值型画像维度（如知识基础、元认知校准度）的动态平滑更新：
+    ``alpha`` 越大越偏向最新观测，越小越依赖历史。结果钳制到 [0, 1]。
+    """
+    value = alpha * observed + (1 - alpha) * old
+    return max(0.0, min(1.0, value))
+
+
 class MetacognitionTrainer:
     """元认知能力培养器。
 

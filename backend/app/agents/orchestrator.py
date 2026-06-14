@@ -38,5 +38,5 @@ class OrchestratorAgent(BaseAgent):
         return update
 
     async def _extract_knowledge(self, user_input: str) -> str:
-        """从自然语言中抽取目标知识点（§4.2.1）。占位待接入 LLM。"""
-        raise NotImplementedError("知识点抽取待接入 LLM extract_knowledge")
+        """从自然语言中抽取目标知识点（§4.2.1）。调用 LLM 抽取。"""
+        return await self.llm.extract_knowledge(user_input)

@@ -17,11 +17,17 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
 
     # 讯飞星火
+    # HTTP OpenAI 兼容版鉴权：只需 APIPassword（控制台「http服务接口认证信息」）。
+    spark_api_password: str = ""
+    # 以下三项为 WebSocket 版鉴权所需，HTTP 版可留空。
     spark_app_id: str = ""
     spark_api_key: str = ""
     spark_api_secret: str = ""
+    # OpenAI 兼容端点；chat 实际请求 {base_url}/v1/chat/completions。
     spark_base_url: str = "https://spark-api-open.xf-yun.com"
-    spark_model: str = "4.0Ultra"
+    # Spark Lite 免费无限量，model 名为 "lite"；升级时改为 4.0Ultra / generalv3.5 等。
+    spark_model: str = "lite"
+    spark_timeout: float = 60.0
 
     # SeeDance
     seedance_api_key: str = ""

@@ -1,0 +1,45 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+
+# === 环境与密钥（绝不提交真实密钥）===
+.env
+.env.local
+*.pem
+*.key
+
+# === 日志与缓存 ===
+logs/
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# === 数据卷 ===
+postgres_data/
+milvus_data/
+neo4j_data/
+
+# === 前端（预留）===
+node_modules/
+.next/
+dist/
+
+# === IDE / 系统 ===
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

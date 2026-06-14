@@ -44,9 +44,17 @@ class _PlaceholderRepo:
     async def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         return []
 
+    async def query_entities(self, entities: list[str], top_k: int = 5) -> list[dict[str, Any]]:
+        """图谱实体查询（供 RetrievalAgent 图检索路）。接 Neo4j 后替换。"""
+        return []
+
     def prerequisite_chain(self, target: str) -> list[dict[str, Any]]:
         """前置知识链（供 ExplainableRecommender 同步查询）。接 Neo4j 后替换。"""
         return []
+
+    async def get_or_create(self, student_id: str) -> dict[str, Any]:
+        """加载/初始化学生画像（供 Profile Agent）。接 PostgreSQL 后替换。"""
+        return {}
 
 
 @lru_cache

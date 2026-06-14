@@ -40,10 +40,17 @@ class RetrievalAgent(BaseAgent):
         return merged[:top_k]
 
     async def _vector_search(self, query: str, top_k: int) -> list[dict[str, Any]]:
-        """向量检索：embedding → Milvus ANN（HNSW/COSINE，§6.3）。"""
+        """向量检索：embedding → Milvus ANN（HNSW/COSINE，§6.3）。
+
+        向量化或向量库未接入时优雅降级为空结果（检索退化为"无外部知识"），
+        不中断主流程（§4.5.2）。
+        """
         if self.vector_store is None:
             return []
-        vector = await self.llm.embed(query)
+        try:
+            vector = await self.llm.embed(query)
+        except NotImplementedError:
+            return []
         return await self.vector_store.search(vector, top_k)
 
     async def _graph_search(self, query: str, top_k: int) -> list[dict[str, Any]]:

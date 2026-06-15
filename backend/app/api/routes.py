@@ -13,9 +13,11 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base import AgentState
 from app.core.config import settings
+from app.db.session import get_session
 from app.dependencies import get_orchestration
 from app.schemas.api import (
     AssessmentResponse,
@@ -108,23 +110,75 @@ async def plan_path(req: PathRequest, graph=Depends(get_orchestration)) -> PathR
 
 
 @router.get("/api/v1/profile/{student_id}", response_model=ProfileResponse, tags=["profile"])
-async def get_profile(student_id: str) -> ProfileResponse:
-    """获取学生画像（§5.3）。骨架阶段返回空画像结构，待接入仓储。"""
-    raise NotImplementedError("get_profile 待接入画像仓储查询")
+async def get_profile(student_id: str, session: AsyncSession = Depends(get_session)) -> ProfileResponse:
+    """获取学生画像（§5.3）。接入 PostgreSQL 真实仓储。"""
+    from app.db.repository import PostgresRepository
+
+    repo = PostgresRepository(session)
+    profile = await repo.get_profile(student_id)
+    if not profile:
+        # 初始化空画像
+        profile = await repo.get_or_create_profile(student_id)
+    return ProfileResponse(
+        student_id=student_id,
+        dimensions=profile,
+        radar_data=[
+            profile.get("knowledge_base", 0.5),
+            profile.get("metacognition", 0.5),
+            profile.get("motivation_strength", 0.5),
+        ],
+        summary=f"学生 {student_id} 的画像",
+        version=profile.get("version", 1),
+    )
 
 
 @router.put("/api/v1/profile", response_model=ProfileResponse, tags=["profile"])
-async def update_profile(req: ProfileUpdateRequest) -> ProfileResponse:
-    """更新画像维度（EWMA，§7.3.1）。骨架阶段待接入仓储与算法持久化。"""
-    raise NotImplementedError("update_profile 待接入画像仓储更新")
+async def update_profile(
+    req: ProfileUpdateRequest, session: AsyncSession = Depends(get_session)
+) -> ProfileResponse:
+    """更新画像维度（EWMA，§7.3.1）。接入 PostgreSQL 真实仓储。"""
+    from app.db.repository import PostgresRepository
+
+    repo = PostgresRepository(session)
+    updated = await repo.update_profile(req.student_id, {req.dimension: req.value})
+    return ProfileResponse(
+        student_id=req.student_id,
+        dimensions=updated,
+        radar_data=[
+            updated.get("knowledge_base", 0.5),
+            updated.get("metacognition", 0.5),
+            updated.get("motivation_strength", 0.5),
+        ],
+        summary=f"学生 {req.student_id} 的画像已更新",
+        version=updated.get("version", 1),
+    )
 
 
 @router.get(
     "/api/v1/assessment/{student_id}", response_model=AssessmentResponse, tags=["assessment"]
 )
-async def get_assessment(student_id: str) -> AssessmentResponse:
-    """获取 10 维度学习效果评估（§3.1.4）。骨架阶段待接入行为数据。"""
-    raise NotImplementedError("get_assessment 待接入行为数据与 Assessment Agent")
+async def get_assessment(
+    student_id: str, session: AsyncSession = Depends(get_session)
+) -> AssessmentResponse:
+    """获取 10 维度学习效果评估（§3.1.4）。接入 PostgreSQL 真实仓储。"""
+    from app.db.repository import PostgresRepository
+
+    repo = PostgresRepository(session)
+    scores = await repo.compute_assessment_dimensions(student_id, DIMENSIONS)
+    total = sum(scores[dim] * w for dim, w in zip(DIMENSIONS, WEIGHTS))
+    warnings = [
+        {"dimension": dim, "score": scores[dim], "threshold": WARNING_THRESHOLDS[dim]}
+        for dim in DIMENSIONS
+        if scores[dim] < WARNING_THRESHOLDS[dim]
+    ]
+    level = "优秀" if total > 0.8 else "良好" if total > 0.6 else "需改进"
+    return AssessmentResponse(
+        student_id=student_id,
+        dimensions=scores,
+        total_score=round(total, 4),
+        level=level,
+        warnings=warnings,
+    )
 
 
 def _first_text(state: AgentState) -> str:

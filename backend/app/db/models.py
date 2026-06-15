@@ -185,3 +185,21 @@ class ReviewSchedule(Base):
     predicted_score: Mapped[float | None] = mapped_column(Float)
     actual_score: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class MetacognitionPrediction(Base):
+    """元认知预测记录（IN-08），§3.7。"""
+
+    __tablename__ = "metacognition_predictions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    topic: Mapped[str] = mapped_column(String(200), nullable=False)
+    prediction: Mapped[int] = mapped_column(Integer)
+    actual_score: Mapped[float | None] = mapped_column(Float)
+    calibration: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("prediction >= 1 AND prediction <= 10", name="ck_pred_range"),
+    )

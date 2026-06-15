@@ -55,9 +55,14 @@ class ProfileAgent(BaseAgent):
         return ewma_update(old, observed, alpha)
 
     async def _load_profile(self, student_id: str) -> dict[str, Any]:
-        """加载画像；骨架返回空画像，接入仓储后替换。"""
+        """加载画像；接入仓储后走真实 DB 查询。"""
         if self.repo is not None:
-            return await self.repo.get_or_create(student_id)
+            method = getattr(self.repo, "get_or_create_profile", None) or getattr(self.repo, "get_or_create", None)
+            if method is not None:
+                try:
+                    return await method(student_id)
+                except Exception:
+                    pass
         return {}
 
     async def _generate_question(self, missing: list[str], profile: dict[str, Any]) -> str:

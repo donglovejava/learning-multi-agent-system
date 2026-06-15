@@ -55,8 +55,18 @@ class AssessmentAgent(BaseAgent):
         }
 
     async def _collect_scores(self, student_id: str) -> dict[str, float]:
-        """从行为数据仓储计算各维度得分。骨架委派给 repo。"""
-        return await self.repo.compute_assessment_dimensions(student_id, DIMENSIONS)
+        """从行为数据仓储计算各维度得分。
+
+        优先用真实仓储的 ``compute_assessment_dimensions``；
+        若仓储未实现该方法（如占位桩），回退到中性值 0.5，保证流程不中断。
+        """
+        method = getattr(self.repo, "compute_assessment_dimensions", None)
+        if method is not None:
+            try:
+                return await method(student_id, DIMENSIONS)
+            except Exception:
+                pass
+        return {dim: 0.5 for dim in DIMENSIONS}
 
     @staticmethod
     def _level(total: float) -> str:

@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: transparent;
+      font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+      user-select: none;
+      -webkit-app-region: no-drag;
+    }
+
+    #pet-container {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+    #pet-container:active { cursor: grabbing; }
+
+    #pet-canvas {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    /* 对话气泡 */
+    #bubble {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.97);
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      font-size: 13px;
+      color: #333;
+      line-height: 1.5;
+      overflow-y: auto;
+    }
+
+    #bubble.show { display: block; }
+
+    #bubble .close-btn {
+      position: absolute;
+      top: 4px; right: 8px;
+      background: none; border: none;
+      font-size: 16px; cursor: pointer;
+      color: #999;
+      line-height: 1;
+    }
+    #bubble .close-btn:hover { color: #333; }
+
+    #bubble .pet-name {
+      font-weight: bold;
+      color: #ff8c00;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    #bubble .message {
+      margin-bottom: 6px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      max-width: 90%;
+      word-break: break-word;
+    }
+    #bubble .message.pet {
+      background: #fff3e0;
+      color: #5d4037;
+    }
+    #bubble .message.user {
+      background: #e3f2fd;
+      color: #1565c0;
+      margin-left: auto;
+      text-align: right;
+    }
+
+    #bubble .input-area {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    #bubble .input-area input {
+      flex: 1;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+    #bubble .input-area input:focus {
+      border-color: #ff8c00;
+    }
+    #bubble .input-area button {
+      background: #ff8c00;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #bubble .input-area button:hover {
+      background: #e67e00;
+    }
+    #bubble .input-area button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    /* 情绪指示器（小爱心/星星飘出效果） */
+    .emoji-float {
+      position: absolute;
+      font-size: 20px;
+      pointer-events: none;
+      animation: floatUp 1.5s ease-out forwards;
+    }
+    @keyframes floatUp {
+      0% { opacity: 1; transform: translateY(0) scale(1); }
+      100% { opacity: 0; transform: translateY(-60px) scale(0.5); }
+    }
+  </style>
+</head>
+<body>
+  <div id="pet-container">
+    <canvas id="pet-canvas" width="64" height="64"></canvas>
+    <div id="bubble">
+      <button class="close-btn" id="closeBtn">&times;</button>
+      <div class="pet-name">🐱 小橘</div>
+      <div id="messages"></div>
+      <div class="input-area">
+        <input type="text" id="msgInput" placeholder="和小橘说说话..." />
+        <button id="sendBtn">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    // ========== 像素画引擎 ==========
+    const canvas = document.getElementById('pet-canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+
+    const W = 64, H = 64;
+    const PX = 4; // 每个"像素"占 4x4 实际像素 = 16x16 逻辑网格
+
+    // 颜色
+    const C = {
+      _: null,          // 透明
+      O: '#FF9800',     // 橙色（身体）
+      o: '#FFB74D',     // 浅橙（肚子/脸）
+      W: '#FFFFFF',     // 白色（肚子）
+      B: '#333333',     // 黑色（眼睛/轮廓）
+      P: '#FF8A80',     // 粉色（鼻子/耳朵内/腮红）
+      G: '#4CAF50',     // 绿色（项圈）
+      Y: '#FFEB3B',     // 黄色（铃铛）
+      R: '#F44336',     // 红色（腮红）
+    };
+
+    // 16x16 逻辑网格的像素画（正面朝右）
+    // 每个字符代表一个 4x4 色块
+    const SPRITES = {
+      // 正面站立（idle 帧 0）
+      idle_0: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____OBOWOBO_____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "________________",
+      ],
+      // 走路帧 1（左脚前）
+      walk_1: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____OBOWOBO_____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "_____OO__OO_____",
+      ],
+      // 走路帧 2（右脚前）
+      walk_2: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____OBOWOBO_____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "____OO____OO____",
+      ],
+      // 睡觉（闭眼）
+      sleep_0: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____O___O__O____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "________________",
+      ],
+      sleep_1: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____O___O__O____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "______zzz_______",
+      ],
+      // 开心（跳跃）
+      happy_0: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____O^O^O__O____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "_____OO__OO_____",
+      ],
+      happy_1: [
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____O^O^O__O____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "_____OO__OO_____",
+        "________________",
+      ],
+      happy_2: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____O^O^O__O____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "____OO____OO____",
+      ],
+      // 担心
+      worry_0: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____OvOvO__O____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "________________",
+      ],
+      worry_1: [
+        "________________",
+        "________________",
+        "___O_______O____",
+        "___OO_____OO____",
+        "___OOO___OOO____",
+        "____OOO_OOO_____",
+        "_____OOOOO______",
+        "____OoOOOoO_____",
+        "____OvOvO__O____",
+        "____OoOOOoO_____",
+        "_____OPPO_______",
+        "____oWWWWo______",
+        "___oWWWWWWo_____",
+        "___oWGGGGWo_____",
+        "____oWWWWo______",
+        "______~~~_______",
+      ],
+    };
+
+    function drawSprite(spriteName, flipX) {
+      const grid = SPRITES[spriteName];
+      if (!grid) return;
+
+      ctx.clearRect(0, 0, W, H);
+
+      for (let row = 0; row < 16; row++) {
+        for (let col = 0; col < 16; col++) {
+          const ch = flipX ? grid[row][15 - col] : grid[row][col];
+          const color = C[ch];
+          if (color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(col * PX, row * PX, PX, PX);
+          }
+        }
+      }
+    }
+
+    // ========== 状态管理 ==========
+    let currentState = 'idle';
+    let currentDirection = 1;
+    let currentFrame = 0;
+    let bubbleVisible = false;
+
+    const stateSpriteMap = {
+      idle: ['idle_0'],
+      walk: ['walk_1', 'walk_2'],
+      sleep: ['sleep_0', 'sleep_1'],
+      happy: ['happy_0', 'happy_1', 'happy_2'],
+      worry: ['worry_0', 'worry_1'],
+    };
+
+    function render() {
+      const sprites = stateSpriteMap[currentState] || ['idle_0'];
+      const sprite = sprites[currentFrame % sprites.length];
+      drawSprite(sprite, currentDirection === -1);
+    }
+
+    // ========== IPC 通信 ==========
+    ipcRenderer.on('pet-update', (event, data) => {
+      currentState = data.state;
+      currentDirection = data.direction;
+      currentFrame = data.frameIndex;
+      render();
+    });
+
+    ipcRenderer.on('show-bubble', (event, show) => {
+      bubbleVisible = show;
+      document.getElementById('bubble').classList.toggle('show', show);
+      if (show) {
+        document.getElementById('msgInput').focus();
+        if (document.getElementById('messages').children.length === 0) {
+          addPetMessage('你好呀！我是小橘，你的学习小伙伴~ 有什么想聊的吗？😊');
+        }
+      }
+    });
+
+    ipcRenderer.on('chat-reply', (event, reply) => {
+      addPetMessage(reply);
+    });
+
+    // ========== 对话气泡 ==========
+    function addPetMessage(text) {
+      const container = document.getElementById('messages');
+      const div = document.createElement('div');
+      div.className = 'message pet';
+      div.textContent = text;
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function addUserMessage(text) {
+      const container = document.getElementById('messages');
+      const div = document.createElement('div');
+      div.className = 'message user';
+      div.textContent = text;
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function sendMessage() {
+      const input = document.getElementById('msgInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      addUserMessage(text);
+      input.value = '';
+      document.getElementById('sendBtn').disabled = true;
+
+      ipcRenderer.send('send-message', text);
+
+      setTimeout(() => {
+        document.getElementById('sendBtn').disabled = false;
+      }, 2000);
+    }
+
+    document.getElementById('sendBtn').addEventListener('click', sendMessage);
+    document.getElementById('msgInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    document.getElementById('closeBtn').addEventListener('click', () => {
+      ipcRenderer.send('close-bubble');
+    });
+
+    // ========== 拖拽 ==========
+    let isDragging = false;
+    let dragStartX = 0, dragStartY = 0;
+
+    const container = document.getElementById('pet-container');
+
+    container.addEventListener('mousedown', (e) => {
+      if (bubbleVisible && e.target.closest('#bubble')) return;
+
+      isDragging = true;
+      dragStartX = e.screenX;
+      dragStartY = e.screenY;
+      ipcRenderer.send('pet-drag-start', e.offsetX, e.offsetY);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        ipcRenderer.send('pet-drag-move', e.screenX, e.screenY);
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        ipcRenderer.send('pet-drag-end');
+      }
+    });
+
+    // 点击宠物（非拖拽）
+    let clickTimer = null;
+    container.addEventListener('click', (e) => {
+      if (bubbleVisible && e.target.closest('#bubble')) return;
+      if (isDragging) return;
+
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => {
+        ipcRenderer.send('pet-click');
+      }, 150);
+    });
+
+    // 初始渲染
+    render();
+  </script>
+</body>
+</html>

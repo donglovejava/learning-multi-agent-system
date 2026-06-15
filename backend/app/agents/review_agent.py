@@ -28,7 +28,7 @@ class ReviewAgent(BaseAgent):
         # 收集本轮需审核的资源产出
         targets = {
             key: state[key]
-            for key in ("document", "quiz", "mindmap", "code")
+            for key in ("document", "quiz", "mindmap", "code", "reading")
             if state.get(key)
         }
         references = state.get("retrieved_context", [])

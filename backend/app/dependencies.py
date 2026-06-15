@@ -21,6 +21,7 @@ from app.agents.orchestrator import OrchestratorAgent
 from app.agents.path_agent import PathAgent
 from app.agents.profile_agent import ProfileAgent
 from app.agents.quiz_agent import QuizAgent
+from app.agents.reading_agent import ReadingAgent
 from app.agents.retrieval_agent import RetrievalAgent
 from app.agents.review_agent import ReviewAgent
 from app.agents.video_agent import VideoAgent
@@ -101,6 +102,7 @@ def build_registry() -> AgentRegistry:
         QuizAgent(llm),
         MindMapAgent(llm, repo),
         CodeAgent(llm),
+        ReadingAgent(llm),
         VideoAgent(get_seedance(), llm),
         PathAgent(repo, get_recommender()),
         AssessmentAgent(repo),

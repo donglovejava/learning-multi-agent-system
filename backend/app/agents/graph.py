@@ -28,7 +28,7 @@ from app.agents.base import AgentState, BaseAgent
 logger = logging.getLogger(__name__)
 
 #: 意图 → 参与的资源生成 Agent 名称（fan-out 分支）
-RESOURCE_AGENTS = {"document", "quiz", "mindmap", "code"}
+RESOURCE_AGENTS = {"document", "quiz", "mindmap", "code", "reading"}
 
 
 class AgentRegistry:

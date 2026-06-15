@@ -76,7 +76,7 @@ async def generate_resources(
     result = await graph.invoke(state)
     resources = [
         result[key]
-        for key in ("document", "quiz", "mindmap", "video", "code")
+        for key in ("document", "quiz", "mindmap", "video", "code", "reading")
         if result.get(key)
     ]
     return ResourceResponse(

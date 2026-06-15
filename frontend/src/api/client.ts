@@ -31,22 +31,25 @@ export interface ResourceResponse {
   explanations: string[]
 }
 
-export async function chat(req: ChatRequest): Promise<ChatResponse> {
-  const resp = await fetch(`${API_BASE}/chat`, {
+async function postJSON<T>(path: string, body: any): Promise<T> {
+  const resp = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify(body),
   })
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '')
+    throw new Error(`HTTP ${resp.status}: ${errText}`)
+  }
   return resp.json()
 }
 
+export async function chat(req: ChatRequest): Promise<ChatResponse> {
+  return postJSON<ChatResponse>('/chat', req)
+}
+
 export async function generateResources(req: ResourceRequest): Promise<ResourceResponse> {
-  const resp = await fetch(`${API_BASE}/resources`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-  return resp.json()
+  return postJSON<ResourceResponse>('/resources', req)
 }

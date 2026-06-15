@@ -52,7 +52,7 @@ async def chat(req: ChatRequest, graph=Depends(get_orchestration)) -> ChatRespon
         "user_input": req.message,
         "errors": [],
     }
-    result = await graph.invoke(state)
+    result = await graph.ainvoke(state)
     return ChatResponse(
         reply=_first_text(result),
         profile_updated=bool(result.get("profile")),
@@ -75,7 +75,7 @@ async def generate_resources(
         "scaffold_level": req.scaffold_level or "medium",
         "errors": [],
     }
-    result = await graph.invoke(state)
+    result = await graph.ainvoke(state)
     resources = [
         result[key]
         for key in ("document", "quiz", "mindmap", "video", "code", "reading")

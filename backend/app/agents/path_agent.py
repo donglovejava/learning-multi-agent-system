@@ -62,25 +62,91 @@ class PathAgent(BaseAgent):
     async def run(self, state: AgentState) -> dict[str, Any]:
         target = state["knowledge_point"]
         profile = state.get("profile", {})
-        # 从图谱仓储取得目标子图（DAG），骨架阶段交由 repo 实现
-        dag = await self.graph_repo.get_subgraph(target, max_depth=5)
-        path = improved_dijkstra(dag, start=self._entry(dag), end=target, profile=profile)
+        # 从图谱仓储取得目标子图（DAG）
+        dag = await self._get_subgraph(target, max_depth=5)
+        if not dag or len(dag) <= 1:
+            # 知识点不在图谱中：返回单节点路径 + 占位解释
+            return {
+                "path": {
+                    "type": "path",
+                    "nodes": [target],
+                    "total_nodes": 1,
+                    "note": "该知识点暂未在知识图谱中，无可推荐前置路径",
+                },
+                "explanation": f"「{target}」暂未在知识图谱中，建议直接学习。",
+            }
+        path = improved_dijkstra(dag, start=self._entry(dag), end=self._resolve_target(dag, target), profile=profile)
         explanation = None
         if self.recommender is not None:
-            result = self.recommender.recommend_with_explanation(
-                state["student_id"], target, profile
-            )
-            explanation = result.explanation
+            try:
+                result = self.recommender.recommend_with_explanation(
+                    state["student_id"], target, self._profile_to_mastery(profile)
+                )
+                explanation = result.explanation
+            except Exception:
+                pass
+        # 路径节点附加难度/类别信息，供前端展示
+        enriched = [self._enrich_node(n) for n in path]
         return {
             "path": {
                 "type": "path",
-                "nodes": path,
-                "total_nodes": len(path),
+                "nodes": enriched,
+                "total_nodes": len(enriched),
+                "target": target,
             },
             "explanation": explanation,
         }
 
-    @staticmethod
-    def _entry(dag: dict[str, dict[str, float]]) -> str:
-        """选取入口节点（无前驱者）。骨架取首个键，接图谱后按入度计算。"""
+    async def _get_subgraph(self, target: str, max_depth: int) -> dict[str, dict[str, float]]:
+        """兼容 sync/async 的 get_subgraph。"""
+        method = getattr(self.graph_repo, "get_subgraph", None)
+        if method is None:
+            return {}
+        result = method(target, max_depth)
+        if hasattr(result, "__await__"):
+            result = await result
+        return result
+
+    def _resolve_target(self, dag: dict[str, dict[str, float]], target: str) -> str:
+        """目标节点可能在图谱中是模糊匹配后的精确名。"""
+        if target in dag:
+            return target
+        # 找一个名字包含 target 的节点
+        for node in dag:
+            if target in node or node in target:
+                return node
+        return target
+
+    def _entry(self, dag: dict[str, dict[str, float]]) -> str:
+        """选取入口节点（无前驱者）；回退首个节点。"""
+        if hasattr(self.graph_repo, "get_entry_nodes"):
+            entries = self.graph_repo.get_entry_nodes()
+            in_dag = [e for e in entries if e in dag]
+            if in_dag:
+                return in_dag[0]
         return next(iter(dag), "current")
+
+    def _enrich_node(self, name: str) -> dict[str, Any]:
+        """给路径节点附加难度/类别信息。"""
+        node = None
+        if hasattr(self.graph_repo, "get_node"):
+            node = self.graph_repo.get_node(name)
+        if node is None:
+            return {"id": name, "label": name}
+        return {
+            "id": node.get("id", name),
+            "label": node.get("name", name),
+            "difficulty": node.get("difficulty"),
+            "category": node.get("category"),
+            "description": node.get("description"),
+        }
+
+    @staticmethod
+    def _profile_to_mastery(profile: dict[str, Any]) -> dict[str, float]:
+        """把画像转成可解释推荐需要的 {知识点: 掌握度}。"""
+        mastery: dict[str, float] = {}
+        # 通用：用 knowledge_base 作为所有知识点基线掌握度
+        base = profile.get("knowledge_base")
+        if isinstance(base, (int, float)):
+            mastery["_default"] = float(base)
+        return mastery

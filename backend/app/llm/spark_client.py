@@ -146,12 +146,75 @@ class SparkLLMClient:
             return user_input
         return result or user_input
 
+    async def extract_profile_info(self, user_message: str) -> dict[str, Any]:
+        """从单轮对话抽取 6 维度画像信息（§4.2.2 / §3.1.1）。
+
+        6 个维度：专业、学习目标、知识基础、学习风格、学习动机、元认知。
+        输出严格 JSON，能识别的字段填值，未涉及的字段留 null。
+        """
+        system = (
+            "你是学习画像分析器。从学生的对话中抽取 6 个维度的信息，"
+            "严格输出一个 JSON 对象，不要任何额外文字或代码围栏。字段：\n"
+            'major(专业，如"计算机")\n'
+            'learning_goal(学习目标：考研/期末/竞赛/兴趣/工作)\n'
+            'knowledge_base(知识基础，0-1 的浮点数，根据自评估算，未知给null)\n'
+            'learning_style(学习风格：视觉/听觉/动觉/读写)\n'
+            'motivation(学习动机：内在/外在)\n'
+            'metacognition(元认知能力，0-1 浮点数，未知给null)\n'
+            "用户没提到的维度填 null。只输出 JSON。"
+        )
+        try:
+            raw = await self.chat(user_message, system=system, temperature=0.0)
+        except LLMError:
+            return {}
+        from app.llm.json_utils import extract_json
+        try:
+            data = extract_json(raw)
+        except ValueError:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if v is not None}
+
+    async def generate_profile_question(
+        self, missing_dimensions: list[str], profile: dict[str, Any]
+    ) -> str:
+        """针对缺失维度生成下一个自然引导问题（§4.2.2）。"""
+        dims_desc = "、".join(missing_dimensions[:2])
+        system = (
+            "你是温暖的 AI 学习伙伴。学生画像还缺少以下维度，"
+            "请像朋友聊天一样自然地问一个问题，一次只问一个维度。"
+            "问题要亲切简短（不超过 30 字），不要像填问卷。"
+        )
+        prompt = (
+            f"还缺少这些维度的信息：{dims_desc}。\n"
+            f"学生已有信息：{profile}\n"
+            "请生成一个自然亲切的引导问题，只输出问题本身。"
+        )
+        try:
+            question = (await self.chat(prompt, system=system, temperature=0.7)).strip()
+        except LLMError:
+            target = missing_dimensions[0]
+            templates = {
+                "专业": "你现在学的是什么专业呀？",
+                "学习目标": "你现在的学习目标是什么呢？考研、期末、还是工作？",
+                "知识基础": "如果给自己当前的基础打分，1-10 分你打几分？",
+                "学习风格": "你更喜欢哪种学习方式？看视频、听课、动手做、还是看书？",
+                "学习动机": "是什么让你想学这个呢？兴趣还是目标？",
+                "元认知": "你平时会复盘自己的学习过程吗？",
+            }
+            return templates.get(target, f"能告诉我关于{target}的情况吗？")
+        return question or f"能聊聊关于{missing_dimensions[0]}的情况吗？"
+
     async def embed(self, text: str) -> list[float]:
         """文本向量化：返回 1024 维向量（对齐 BGE-large-zh，§6.3）。
 
-        OpenAI 兼容端点不含向量化，需接入讯飞独立向量化接口；接 Milvus 时实现。
+        代理到独立的 EmbeddingClient（讯飞向量化走单独端点，model=emb）。
         """
-        raise NotImplementedError("embed() 待接入讯飞文本向量化 API（OpenAI 兼容端点不含）")
+        from app.llm.embedding_client import EmbeddingClient
+        if not hasattr(self, "_embedder"):
+            self._embedder = EmbeddingClient(self.api_password, self.base_url)
+        return await self._embedder.embed(text)
 
     # --- 内部实现 -----------------------------------------------------------
 

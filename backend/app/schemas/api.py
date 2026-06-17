@@ -33,6 +33,9 @@ class ChatResponse(BaseModel):
     profile_updated: bool = False
     explanation: Optional[str] = None
     conversation_id: str
+    profile: Optional[dict[str, Any]] = None
+    profile_completion: Optional[float] = None
+    next_question: Optional[str] = None
 
 
 # === 资源生成 ===

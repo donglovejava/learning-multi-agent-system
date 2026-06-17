@@ -33,9 +33,17 @@ class RetrievalAgent(BaseAgent):
         return {"retrieved_context": context}
 
     async def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
-        """向量 + 图谱双引擎检索，RRF 融合后取 top_k。"""
-        vector_hits = await self._vector_search(query, top_k)
-        graph_hits = await self._graph_search(query, top_k)
+        """向量 + 图谱双引擎检索，RRF 融合后取 top_k。
+
+        容错：query 非字符串、或两路引擎都不可用时返回空，不中断主流程。
+        """
+        if not isinstance(query, str) or not query:
+            return []
+        try:
+            vector_hits = await self._vector_search(query, top_k)
+            graph_hits = await self._graph_search(query, top_k)
+        except Exception:
+            return []
         merged = self._rrf_merge(vector_hits, graph_hits, k=60)
         return merged[:top_k]
 
@@ -54,11 +62,30 @@ class RetrievalAgent(BaseAgent):
         return await self.vector_store.search(vector, top_k)
 
     async def _graph_search(self, query: str, top_k: int) -> list[dict[str, Any]]:
-        """图谱检索：实体抽取 → Neo4j 关联查询（§6.4）。"""
+        """图谱检索：实体抽取 → 图谱节点查询（§6.4）。
+
+        graph_store 提供 async search/query_entities；不可用时返回空。
+        """
         if self.graph_store is None:
             return []
-        entities = await self._extract_entities(query)
-        return await self.graph_store.query_entities(entities, top_k)
+        # 优先用 search（关键词匹配），回退 query_entities
+        method = getattr(self.graph_store, "search", None)
+        try:
+            if method is not None:
+                result = method(query, top_k)
+                if hasattr(result, "__await__"):
+                    result = await result
+                return result or []
+            entities = await self._extract_entities(query)
+            qe = getattr(self.graph_store, "query_entities", None)
+            if qe is None:
+                return []
+            result = qe(entities, top_k)
+            if hasattr(result, "__await__"):
+                result = await result
+            return result or []
+        except Exception:
+            return []
 
     @staticmethod
     def _rrf_merge(

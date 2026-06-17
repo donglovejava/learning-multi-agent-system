@@ -59,9 +59,14 @@ class _PlaceholderRepo:
 
 
 @lru_cache
-def _get_repo() -> _PlaceholderRepo:
-    """共享占位仓储单例（图谱/向量/DB 的统一桩）。"""
-    return _PlaceholderRepo()
+def _get_repo() -> Any:
+    """统一仓储单例。
+
+    优先用真实图谱仓储（KnowledgeGraphRepo，含种子 DAG）；
+    画像相关方法回退到 PostgreSQL（PostgresRepository 按需在路由内构造）。
+    """
+    from app.db.knowledge_graph_repo import get_graph_repo
+    return get_graph_repo()
 
 
 @lru_cache
@@ -85,6 +90,39 @@ def get_scaffold() -> ScaffoldGenerator:
 
 
 @lru_cache
+def get_profile_agent() -> ProfileAgent:
+    """ProfileAgent 单例（供 chat 路由直接调用 process_reply）。
+
+    持久化依赖 PostgreSQL；无 DB 时 repo=None，画像只在内存累积。
+    """
+    return ProfileAgent(get_llm(), _profile_repo())
+
+
+def _profile_repo() -> Any:
+    """画像持久化仓储：无 DB 时返回 None（仅内存）。"""
+    try:
+        from app.db.session import SessionFactory
+        from app.db.repository import PostgresRepository
+
+        class _LazyPgRepo:
+            """懒会话画像仓储：每次调用按需开 session。"""
+            async def get_or_create_profile(self, student_id: str) -> dict[str, Any]:
+                async with SessionFactory() as session:
+                    return await PostgresRepository(session).get_or_create_profile(student_id)
+
+            async def get_or_create(self, student_id: str) -> dict[str, Any]:
+                return await self.get_or_create_profile(student_id)
+
+            async def update_profile(self, student_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+                async with SessionFactory() as session:
+                    return await PostgresRepository(session).update_profile(student_id, updates)
+
+        return _LazyPgRepo()
+    except Exception:
+        return None
+
+
+@lru_cache
 def build_registry() -> AgentRegistry:
     """构造并注册全部 11 个 Agent。
 
@@ -97,7 +135,7 @@ def build_registry() -> AgentRegistry:
     for agent in (
         OrchestratorAgent(llm),
         ProfileAgent(llm, repo),
-        RetrievalAgent(llm, repo, repo),
+        RetrievalAgent(llm, None, repo),
         DocumentAgent(llm, get_scaffold()),
         QuizAgent(llm),
         MindMapAgent(llm, repo),

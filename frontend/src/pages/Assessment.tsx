@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
 const DIMENSIONS = [
@@ -13,40 +14,71 @@ const DIMENSIONS = [
   { key: '学习持续性', weight: 5, threshold: 60 },
 ]
 
-const MOCK_SCORES: Record<string, number> = {
-  '知识掌握度': 72,
-  '学习进度': 45,
-  '学习时长': 68,
-  '资源使用率': 55,
-  '练习正确率': 65,
-  '学习频率': 40,
-  '知识遗忘率': 75,
-  '深度学习能力': 58,
-  '学习主动性': 30,
-  '学习持续性': 62,
+interface AssessmentData {
+  student_id: string
+  dimensions: Record<string, number>
+  total_score: number
+  level: string
+  warnings: Array<{ dimension: string; score: number; threshold: number }>
+}
+
+const FALLBACK_SCORES: Record<string, number> = {
+  '知识掌握度': 72, '学习进度': 45, '学习时长': 68, '资源使用率': 55,
+  '练习正确率': 65, '学习频率': 40, '知识遗忘率': 75, '深度学习能力': 58,
+  '学习主动性': 30, '学习持续性': 62,
 }
 
 export default function Assessment() {
-  const totalScore = DIMENSIONS.reduce((acc, d) => acc + (MOCK_SCORES[d.key] || 0) * d.weight / 100, 0)
-  const level = totalScore > 80 ? '优秀' : totalScore > 60 ? '良好' : '需改进'
-  const warnings = DIMENSIONS.filter(d => (MOCK_SCORES[d.key] || 0) < d.threshold)
+  const [data, setData] = useState<AssessmentData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [isReal, setIsReal] = useState(false)
+  const [studentId] = useState('demo-001')
+
+  useEffect(() => {
+    fetch(`/api/v1/assessment/${studentId}`)
+      .then(r => r.json())
+      .then((d: AssessmentData) => {
+        if (d && d.dimensions && Object.keys(d.dimensions).length > 0) {
+          setData(d)
+          setIsReal(true)
+        }
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [studentId])
+
+  // 把 0-1 的得分转成百分比展示
+  const rawScores = (data?.dimensions && isReal)
+    ? Object.fromEntries(
+        Object.entries(data.dimensions).map(([k, v]) => [k, Math.round(v * 100)])
+      )
+    : FALLBACK_SCORES
+
+  const totalScore = DIMENSIONS.reduce((acc, d) => acc + (rawScores[d.key] || 0) * d.weight / 100, 0)
+  const level = data?.level || (totalScore > 80 ? '优秀' : totalScore > 60 ? '良好' : '需改进')
+  const warnings = DIMENSIONS.filter(d => (rawScores[d.key] || 0) < d.threshold)
 
   const chartData = DIMENSIONS.map(d => ({
     name: d.key,
-    score: MOCK_SCORES[d.key] || 0,
+    score: rawScores[d.key] || 0,
     threshold: d.threshold,
   }))
+
+  if (loading) return <p className="text-gray-400">加载中...</p>
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">学习效果评估</h1>
-        <div className={`px-4 py-2 rounded-lg font-semibold ${
-          level === '优秀' ? 'bg-green-100 text-green-800' :
-          level === '良好' ? 'bg-blue-100 text-blue-800' :
-          'bg-yellow-100 text-yellow-800'
-        }`}>
-          综合等级：{level}（{Math.round(totalScore)} 分）
+        <div className="flex items-center gap-3">
+          {!isReal && <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">示例数据</span>}
+          <div className={`px-4 py-2 rounded-lg font-semibold ${
+            level === '优秀' ? 'bg-green-100 text-green-800' :
+            level === '良好' ? 'bg-blue-100 text-blue-800' :
+            'bg-yellow-100 text-yellow-800'
+          }`}>
+            综合等级：{level}（{Math.round(totalScore)} 分）
+          </div>
         </div>
       </div>
 
@@ -75,7 +107,7 @@ export default function Assessment() {
           <ul className="space-y-1">
             {warnings.map(w => (
               <li key={w.key} className="text-sm text-red-800">
-                • <strong>{w.key}</strong>：当前 {MOCK_SCORES[w.key]}%，低于阈值 {w.threshold}%
+                • <strong>{w.key}</strong>：当前 {rawScores[w.key]}%，低于阈值 {w.threshold}%
               </li>
             ))}
           </ul>
@@ -96,7 +128,7 @@ export default function Assessment() {
           </thead>
           <tbody className="divide-y">
             {DIMENSIONS.map(d => {
-              const score = MOCK_SCORES[d.key] || 0
+              const score = rawScores[d.key] || 0
               const passed = score >= d.threshold
               return (
                 <tr key={d.key} className={passed ? '' : 'bg-red-50'}>
@@ -105,7 +137,7 @@ export default function Assessment() {
                   <td className="px-4 py-3 text-center font-semibold">{score}%</td>
                   <td className="px-4 py-3 text-center text-gray-500">{d.threshold}%</td>
                   <td className="px-4 py-3 text-center">
-                    {passed ? <span className="text-green-600">✓ 正常</span> : <span className="text-red-600"> 预警</span>}
+                    {passed ? <span className="text-green-600">✓ 正常</span> : <span className="text-red-600">⚠ 预警</span>}
                   </td>
                 </tr>
               )

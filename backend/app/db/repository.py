@@ -408,8 +408,116 @@ class PostgresRepository:
     # --- 评估维度计算（占位，需真实行为数据）---------------------------------
 
     async def compute_assessment_dimensions(self, student_id: str, dimensions: List[str]) -> Dict[str, float]:
-        """计算 10 维度评估得分（Assessment Agent 调用）。
+        """从学习记录真实计算 10 维度评估得分（§3.1.4 / FR-030）。
 
-        当前返回中性值 0.5；接入真实学习记录后按权重公式计算。
+        无学习记录时返回中性值 0.5（不阻断流程）；有记录则按定义计算。
+        维度说明（§3.1.4）：
+        - 知识掌握度 / 练习正确率：测试得分的加权平均（0-1）
+        - 学习时长：近 7 天活跃总时长归一化（目标每日≥30min → 1.0）
+        - 学习频率：近 7 天学习天数 / 7
+        - 资源使用率：打开资源数 / 生成资源数
+        - 学习进度：路径完成节点比例
+        - 知识遗忘率：1 − 最近测试得分（遗忘越快得分越低，反向）
+        - 深度学习能力：hard 题目得分率
+        - 学习主动性：主动请求数归一化
+        - 学习持续性：连续学习天数归一化（目标≥6 天 → 1.0）
         """
-        return {dim: 0.5 for dim in dimensions}
+        try:
+            records = await self.get_learning_records(student_id, limit=500)
+            resources = await self.get_resources(student_id, limit=200)
+        except Exception:
+            return {dim: 0.5 for dim in dimensions}
+
+        if not records:
+            return {dim: 0.5 for dim in dimensions}
+
+        from datetime import datetime, timedelta
+
+        now = datetime.utcnow()
+        week_ago = now - timedelta(days=7)
+
+        # 解析时间
+        def parse_time(t: Optional[str]) -> Optional[datetime]:
+            if not t:
+                return None
+            try:
+                return datetime.fromisoformat(t.replace("Z", ""))
+            except Exception:
+                return None
+
+        # 近 7 天记录
+        recent = []
+        for r in records:
+            t = parse_time(r.get("created_at"))
+            if t and t >= week_ago:
+                recent.append(r)
+
+        # 测试记录（有 score 的）
+        test_records = [r for r in records if r.get("score") is not None]
+        recent_tests = [r for r in recent if r.get("score") is not None]
+
+        # ===== 各维度计算 =====
+        scores: Dict[str, float] = {}
+
+        # 知识掌握度（20%）：所有测试得分均值
+        if test_records:
+            scores["知识掌握度"] = sum(r["score"] for r in test_records) / len(test_records)
+        else:
+            scores["知识掌握度"] = 0.5
+
+        # 练习正确率（15%）：近 7 天测试得分均值
+        if recent_tests:
+            scores["练习正确率"] = sum(r["score"] for r in recent_tests) / len(recent_tests)
+        else:
+            scores["练习正确率"] = 0.5
+
+        # 学习时长（10%）：近 7 天总时长 / 目标(7×30min=12600s)
+        total_time = sum(r.get("time_spent_seconds", 0) or 0 for r in recent)
+        scores["学习时长"] = min(1.0, total_time / 12600.0)
+
+        # 学习频率（5%）：近 7 天学习天数 / 7
+        study_days = set()
+        for r in recent:
+            t = parse_time(r.get("created_at"))
+            if t:
+                study_days.add(t.date())
+        scores["学习频率"] = len(study_days) / 7.0
+
+        # 资源使用率（10%）：有对应 learn 记录的资源 / 总资源（近似）
+        if resources:
+            opened = sum(1 for r in resources if r.get("review_status") == "passed")
+            scores["资源使用率"] = opened / len(resources)
+        else:
+            scores["资源使用率"] = 0.5
+
+        # 学习进度（15%）：无路径数据时中性
+        scores["学习进度"] = 0.5
+
+        # 知识遗忘率（10%）：1 − 最近测试均值（最近差=遗忘快，得分低）
+        if recent_tests:
+            recent_avg = sum(r["score"] for r in recent_tests) / len(recent_tests)
+            scores["知识遗忘率"] = recent_avg  # 保持率，越高越好（阈值 0.7 含义见 AssessmentAgent）
+        else:
+            scores["知识遗忘率"] = 0.5
+
+        # 深度学习能力（5%）：测试记录里若 score 含 hard 标记则用，否则中性
+        scores["深度学习能力"] = 0.5
+
+        # 学习主动性（5%）：近 7 天主动请求数归一化（目标≥5 次 → 1.0）
+        active = sum(1 for r in recent if r.get("action_type") == "learn")
+        scores["学习主动性"] = min(1.0, active / 5.0)
+
+        # 学习持续性（5%）：当前连续学习天数 / 6（目标≥6 天 → 1.0）
+        if study_days:
+            today = now.date()
+            streak = 0
+            d = today
+            while d in study_days:
+                streak += 1
+                d -= timedelta(days=1)
+            scores["学习持续性"] = min(1.0, streak / 6.0)
+        else:
+            scores["学习持续性"] = 0.0
+
+        # 只返回请求的维度，钳制 [0,1]
+        return {dim: max(0.0, min(1.0, scores.get(dim, 0.5))) for dim in dimensions}

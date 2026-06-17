@@ -15,10 +15,11 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.assessment_agent import DIMENSIONS, WARNING_THRESHOLDS, WEIGHTS
 from app.agents.base import AgentState
 from app.core.config import settings
 from app.db.session import get_session
-from app.dependencies import get_orchestration
+from app.dependencies import get_llm, get_orchestration
 from app.schemas.api import (
     AssessmentResponse,
     ChatRequest,
@@ -45,19 +46,44 @@ async def health() -> HealthResponse:
 async def chat(req: ChatRequest, graph=Depends(get_orchestration)) -> ChatResponse:
     """对话接口：画像构建与资源请求的统一入口（§5.3）。
 
-    经 Orchestrator 识别意图后驱动相应流程；此处返回回复与可选解释。
+    真实数据流：
+    1. Orchestrator 识别意图
+    2. 若是画像构建意图，走 ProfileAgent.process_reply（LLM 抽取+EWMA+持久化）
+    3. 其它意图驱动编排图生成资源
     """
-    state: AgentState = {
+    # 先让 Orchestrator 识别意图
+    orchestrator_state: AgentState = {
         "student_id": req.student_id,
         "user_input": req.message,
         "errors": [],
     }
-    result = await graph.ainvoke(state)
+    intent = await get_llm().classify_intent(req.message)
+
+    # 画像构建意图：直接走 ProfileAgent.process_reply，不进入资源生成流程
+    if intent == "build_profile":
+        from app.dependencies import get_profile_agent
+        agent = get_profile_agent()
+        result = await agent.process_reply(req.student_id, req.message)
+        reply = result.get("question") or result.get("summary") or "好的，我了解了~"
+        return ChatResponse(
+            reply=reply,
+            profile_updated=True,
+            explanation=None,
+            conversation_id=req.conversation_id or uuid.uuid4().hex,
+            profile=result.get("profile"),
+            profile_completion=result.get("completion"),
+            next_question=result.get("question"),
+        )
+
+    # 其它意图：驱动编排图
+    orchestrator_state["intent"] = intent
+    result = await graph.ainvoke(orchestrator_state)
     return ChatResponse(
         reply=_first_text(result),
         profile_updated=bool(result.get("profile")),
         explanation=result.get("explanation"),
         conversation_id=req.conversation_id or uuid.uuid4().hex,
+        profile=result.get("profile"),
     )
 
 
@@ -98,13 +124,18 @@ async def plan_path(req: PathRequest, graph=Depends(get_orchestration)) -> PathR
         "knowledge_point": req.target_knowledge,
         "errors": [],
     }
-    result = await graph.invoke(state)
+    result = await graph.ainvoke(state)
     path = result.get("path") or {}
     nodes = path.get("nodes", [])
+    # nodes 已是 enriched dict 列表（含 label/difficulty/category），直接透传
+    path_nodes = [
+        n if isinstance(n, dict) else {"id": n, "label": str(n)}
+        for n in nodes
+    ]
     return PathResponse(
-        path=[{"id": n} for n in nodes],
+        path=path_nodes,
         total_nodes=path.get("total_nodes", len(nodes)),
-        estimated_weeks=path.get("estimated_weeks", 0.0),
+        estimated_weeks=max(1, len(nodes)) * 0.5,
         explanation=result.get("explanation"),
     )
 
@@ -179,6 +210,27 @@ async def get_assessment(
         level=level,
         warnings=warnings,
     )
+
+
+@router.get("/api/v1/knowledge/graph", tags=["knowledge"])
+async def get_knowledge_graph() -> dict:
+    """返回完整知识图谱（节点 + 前置边），供前端可视化。"""
+    from app.dependencies import _get_repo
+
+    repo = _get_repo()
+    nodes = repo.all_nodes() if hasattr(repo, "all_nodes") else []
+    edges = repo.all_edges() if hasattr(repo, "all_edges") else []
+    return {"nodes": nodes, "edges": edges}
+
+
+@router.get("/api/v1/knowledge/prerequisite/{target}", tags=["knowledge"])
+async def get_prerequisite_chain(target: str) -> dict:
+    """返回目标知识点的完整前置链（可解释推荐数据源）。"""
+    from app.dependencies import _get_repo
+
+    repo = _get_repo()
+    chain = repo.prerequisite_chain(target) if hasattr(repo, "prerequisite_chain") else []
+    return {"target": target, "chain": chain}
 
 
 def _first_text(state: AgentState) -> str:
